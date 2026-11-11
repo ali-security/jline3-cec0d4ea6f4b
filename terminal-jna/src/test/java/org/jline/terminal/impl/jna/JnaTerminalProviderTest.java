@@ -30,7 +30,9 @@ public class JnaTerminalProviderTest {
 
     @Test
     void testIsSystemStream() {
-        assumeFalse(Platform.isMac() && Platform.is64Bit() && Platform.isARM());
+        assumeFalse(
+                Platform.isMac() && Platform.is64Bit() && Platform.isARM(),
+                "JNA native terminal is disabled on macOS ARM64 (Apple Silicon), see jline3 issue #688");
 
         assertDoesNotThrow(() -> new JnaTerminalProvider().isSystemStream(SystemStream.Output));
     }
@@ -38,7 +40,9 @@ public class JnaTerminalProviderTest {
     @Test
     @DisabledOnOs(OS.WINDOWS)
     void testNewTerminal() throws IOException {
-        assumeFalse(Platform.isMac() && Platform.is64Bit() && Platform.isARM());
+        assumeFalse(
+                Platform.isMac() && Platform.is64Bit() && Platform.isARM(),
+                "JNA native terminal is disabled on macOS ARM64 (Apple Silicon), see jline3 issue #688");
 
         PipedOutputStream pos = new PipedOutputStream();
         PipedInputStream pis = new PipedInputStream(pos);
