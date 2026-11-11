@@ -52,6 +52,24 @@ public class FfmTerminalProvider implements TerminalProvider {
     }
 
     @Override
+    public void startInitialization() {
+        Thread t = new Thread(
+                () -> {
+                    try {
+                        // Force SysHandles.<clinit> to run so that its cost overlaps
+                        // with the caller's serial work (encoding computation, etc.)
+                        @SuppressWarnings("unused")
+                        Object unused = CLibrary.SysHandles.CAPTURED_STATE_LAYOUT;
+                    } catch (Throwable ignored) {
+                        // swallow — real failures will surface in sysTerminal()
+                    }
+                },
+                "jline-ffm-init");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    @Override
     public int getConsoleCodepage() {
         if (OSUtils.IS_WINDOWS) {
             return Kernel32.GetConsoleOutputCP();

@@ -230,6 +230,17 @@ public interface TerminalProvider {
     int systemStreamWidth(SystemStream stream);
 
     /**
+     * Hints that a terminal will be created soon, allowing the provider to begin
+     * expensive initialisation (e.g. native downcall handle creation) on a background
+     * thread so that it overlaps with the caller's serial work.
+     *
+     * <p>The default implementation does nothing. Providers whose {@code sysTerminal()}
+     * path triggers costly class-initialisation blocks should override this to warm
+     * those holders in a daemon thread.</p>
+     */
+    default void startInitialization() {}
+
+    /**
      * Retrieve the Windows console output code page.
      *
      * On Windows this returns the console output code page; on non-Windows platforms or when the code page

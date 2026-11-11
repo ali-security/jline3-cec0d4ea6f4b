@@ -17,7 +17,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.charset.UnsupportedCharsetException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -30,6 +29,7 @@ import java.util.stream.Stream;
 
 import org.jline.terminal.impl.AbstractPosixTerminal;
 import org.jline.terminal.impl.AbstractTerminal;
+import org.jline.terminal.impl.DeferredTerminal;
 import org.jline.terminal.impl.DumbTerminal;
 import org.jline.terminal.impl.DumbTerminalProvider;
 import org.jline.terminal.spi.SystemStream;
@@ -905,6 +905,38 @@ public final class TerminalBuilder {
         return terminal;
     }
 
+    /**
+     * Asynchronous variant of {@link #build()} that returns a {@link Terminal} immediately.
+     *
+     * <p>The returned terminal is a lightweight proxy that delegates all methods to the
+     * real terminal once construction completes on a daemon thread.  Most methods block
+     * transparently until the real terminal is ready; {@link Terminal#writer()} and
+     * {@link Terminal#getType()} return a dumb fallback when called from the build thread
+     * itself (reentrancy guard needed because FFM class initialisation may call back
+     * through the terminal during init).</p>
+     *
+     * <p>Callers that need to ensure the terminal is fully ready can call any blocking
+     * method (e.g. {@code getType()}) before proceeding.</p>
+     *
+     * @return a terminal proxy that completes in the background
+     */
+    public Terminal buildDeferred() {
+        DeferredTerminal deferred = new DeferredTerminal();
+        Thread t = new Thread(
+                () -> {
+                    try {
+                        deferred.complete(build());
+                    } catch (Throwable e) {
+                        deferred.completeExceptionally(e);
+                    }
+                },
+                "jline-terminal-build");
+        t.setDaemon(true);
+        deferred.setBuildThread(t);
+        t.start();
+        return deferred;
+    }
+
     private Terminal doBuild() throws IOException {
         String name = this.name;
         if (name == null) {
@@ -1304,20 +1336,24 @@ public final class TerminalBuilder {
      */
     public List<TerminalProvider> getProviders(String provider, IllegalStateException exception) {
         List<TerminalProvider> providers = new ArrayList<>();
-        // Check ffm provider
-        checkProvider(provider, exception, providers, ffm, PROP_FFM, PROP_PROVIDER_FFM, classLoader);
-        // Check jni provider
-        checkProvider(provider, exception, providers, jni, PROP_JNI, PROP_PROVIDER_JNI, classLoader);
-        // Check exec provider
-        checkProvider(provider, exception, providers, exec, PROP_EXEC, PROP_PROVIDER_EXEC, classLoader);
-        // Order providers
+        // Try providers in preference order so we can short-circuit after the first success,
+        // avoiding the cost of loading later providers (JNI native lib extraction, Exec subprocess).
         List<String> order = Arrays.asList(
                 (this.providers != null ? this.providers : System.getProperty(PROP_PROVIDERS, PROP_PROVIDERS_DEFAULT))
                         .split(","));
-        providers.sort(Comparator.comparing(l -> {
-            int idx = order.indexOf(l.name());
-            return idx >= 0 ? idx : Integer.MAX_VALUE;
-        }));
+        for (String name : order) {
+            name = name.trim();
+            if (name.equals(PROP_PROVIDER_FFM)) {
+                checkProvider(provider, exception, providers, ffm, PROP_FFM, PROP_PROVIDER_FFM, classLoader);
+            } else if (name.equals(PROP_PROVIDER_JNI)) {
+                checkProvider(provider, exception, providers, jni, PROP_JNI, PROP_PROVIDER_JNI, classLoader);
+            } else if (name.equals(PROP_PROVIDER_EXEC)) {
+                checkProvider(provider, exception, providers, exec, PROP_EXEC, PROP_PROVIDER_EXEC, classLoader);
+            }
+            if (!providers.isEmpty()) {
+                break;
+            }
+        }
         String names = providers.stream().map(TerminalProvider::name).collect(Collectors.joining(", "));
         Log.debug("Available providers: " + names);
         return providers;
@@ -1338,7 +1374,9 @@ public final class TerminalBuilder {
         if (doLoad) {
             try {
                 TerminalProvider prov = TerminalProvider.load(name, classLoader);
-                prov.isSystemStream(SystemStream.Output);
+                if (prov.isSystemStream(SystemStream.Output)) {
+                    prov.startInitialization();
+                }
                 providers.add(prov);
             } catch (Throwable t) {
                 Log.debug("Unable to load " + name + " provider: ", t);
